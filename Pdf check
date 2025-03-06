@@ -1,39 +1,50 @@
 import pdfplumber
 import difflib
+import nltk
 
-def extract_text_per_page(pdf_path):
-    """Extracts all text from each page and returns a combined list of words"""
-    all_text = []
+nltk.download("punkt")  # Download tokenizer
+
+def extract_sentences_per_page(pdf_path):
+    """Extract sentences from each page and store them with page numbers"""
+    text_per_page = {}
     with pdfplumber.open(pdf_path) as pdf:
-        for page in pdf.pages:
+        for page_num, page in enumerate(pdf.pages, start=1):
             text = page.extract_text() or ""
-            words = text.split()  # Splitting by space to ignore line breaks
-            all_text.extend(words)
-    return all_text
+            sentences = nltk.sent_tokenize(text)  # Sentence-level split
+            text_per_page[page_num] = sentences
+    return text_per_page
 
 def compare_pdfs(pdf1_path, pdf2_path):
-    """Compares two PDFs and categorizes deviations"""
-    pdf1_words = extract_text_per_page(pdf1_path)
-    pdf2_words = extract_text_per_page(pdf2_path)
+    """Compare two PDFs at the sentence level"""
+    pdf1_sentences = extract_sentences_per_page(pdf1_path)
+    pdf2_sentences = extract_sentences_per_page(pdf2_path)
 
     accepted_deviations = []
     not_accepted_deviations = []
 
-    # Check for missing and extra words
-    diff = list(difflib.unified_diff(pdf1_words, pdf2_words, lineterm=''))
+    # Flatten sentences with page numbers
+    pdf1_sent_list = [(page, sent.strip()) for page, sents in pdf1_sentences.items() for sent in sents]
+    pdf2_sent_list = [(page, sent.strip()) for page, sents in pdf2_sentences.items() for sent in sents]
 
-    for line in diff:
-        if line.startswith("- "):  # Missing in PDF 2
-            not_accepted_deviations.append(f"Missing text in PDF 2: {line[2:]}")
-        elif line.startswith("+ "):  # Extra in PDF 2
-            not_accepted_deviations.append(f"Extra text in PDF 2: {line[2:]}")
+    pdf1_sentence_set = {sent for _, sent in pdf1_sent_list}
+    pdf2_sentence_set = {sent for _, sent in pdf2_sent_list}
 
-    # Check if words exist anywhere (position ignored)
-    for word in pdf1_words:
-        if word in pdf2_words:
-            accepted_deviations.append(f"Text found elsewhere: '{word}'")
+    # Check for missing and extra sentences
+    for page, sent in pdf1_sent_list:
+        if sent not in pdf2_sentence_set:
+            not_accepted_deviations.append(f"Missing sentence in PDF 2 (Page {page}): '{sent}'")
 
-    # Remove duplicates from accepted deviations
+    for page, sent in pdf2_sent_list:
+        if sent not in pdf1_sentence_set:
+            not_accepted_deviations.append(f"Extra sentence in PDF 2 (Page {page}): '{sent}'")
+
+    # Check if sentences exist elsewhere (position ignored)
+    for page1, sent1 in pdf1_sent_list:
+        found_elsewhere = any(sent1 == sent2 for _, sent2 in pdf2_sent_list)
+        if found_elsewhere:
+            accepted_deviations.append(f"Sentence moved: '{sent1}' (Found on a different page)")
+
+    # Remove duplicates
     accepted_deviations = list(set(accepted_deviations))
 
     # Output results
