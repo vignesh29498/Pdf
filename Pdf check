@@ -1,73 +1,40 @@
-Here’s an improved version of the script that provides detailed output by categorizing deviations into Accepted and Not Accepted based on your criteria.
-
-
----
-
-Enhancements:
-
-✅ Accepted Deviations:
-
-Text found but in a different location (within the same page or across pages).
-
-
-❌ Not Accepted Deviations:
-
-Text missing in PDF 2 but present in PDF 1.
-
-Extra text in PDF 2 that is not in PDF 1.
-
-
-
----
-
-Install Dependencies
-
-pip install pdfplumber difflib
-
-Python Code:
-
 import pdfplumber
 import difflib
 
 def extract_text_per_page(pdf_path):
-    """Extract text content from each page separately"""
-    text_per_page = []
+    """Extracts all text from each page and returns a combined list of words"""
+    all_text = []
     with pdfplumber.open(pdf_path) as pdf:
-        for page_num, page in enumerate(pdf.pages, start=1):
+        for page in pdf.pages:
             text = page.extract_text() or ""
-            text_per_page.append((page_num, text.strip()))
-    return text_per_page
+            words = text.split()  # Splitting by space to ignore line breaks
+            all_text.extend(words)
+    return all_text
 
 def compare_pdfs(pdf1_path, pdf2_path):
-    """Compare two PDFs for content shifts and missing data"""
-    pdf1_text = extract_text_per_page(pdf1_path)
-    pdf2_text = extract_text_per_page(pdf2_path)
-
-    pdf1_lines = {page: text.splitlines() for page, text in pdf1_text}
-    pdf2_lines = {page: text.splitlines() for page, text in pdf2_text}
+    """Compares two PDFs and categorizes deviations"""
+    pdf1_words = extract_text_per_page(pdf1_path)
+    pdf2_words = extract_text_per_page(pdf2_path)
 
     accepted_deviations = []
     not_accepted_deviations = []
 
-    # Convert to continuous text for diff checking
-    pdf1_combined = "\n".join(line for _, text in pdf1_text for line in text.splitlines())
-    pdf2_combined = "\n".join(line for _, text in pdf2_text for line in text.splitlines())
-
-    # Compare using difflib
-    diff = list(difflib.unified_diff(pdf1_combined.splitlines(), pdf2_combined.splitlines(), lineterm=''))
+    # Check for missing and extra words
+    diff = list(difflib.unified_diff(pdf1_words, pdf2_words, lineterm=''))
 
     for line in diff:
-        if line.startswith("- "):  # Text missing in PDF 2
+        if line.startswith("- "):  # Missing in PDF 2
             not_accepted_deviations.append(f"Missing text in PDF 2: {line[2:]}")
-        elif line.startswith("+ "):  # Extra text in PDF 2
+        elif line.startswith("+ "):  # Extra in PDF 2
             not_accepted_deviations.append(f"Extra text in PDF 2: {line[2:]}")
-    
-    # Check if text is present but in a different place
-    for page1, lines1 in pdf1_lines.items():
-        for line1 in lines1:
-            found_elsewhere = any(line1 in lines2 for _, lines2 in pdf2_lines.items())
-            if found_elsewhere:
-                accepted_deviations.append(f"Text moved: '{line1}' (Different position or page)")
+
+    # Check if words exist anywhere (position ignored)
+    for word in pdf1_words:
+        if word in pdf2_words:
+            accepted_deviations.append(f"Text found elsewhere: '{word}'")
+
+    # Remove duplicates from accepted deviations
+    accepted_deviations = list(set(accepted_deviations))
 
     # Output results
     print("\n=== Accepted Deviations ===")
@@ -88,31 +55,3 @@ def compare_pdfs(pdf1_path, pdf2_path):
 pdf1 = "sample1.pdf"
 pdf2 = "sample2.pdf"
 compare_pdfs(pdf1, pdf2)
-
-
----
-
-Output Example
-
-Accepted Deviations:
-
-✅ Text moved: 'Product Details' (Different position or page)
-✅ Text moved: 'Pricing Information' (Different position or page)
-
-Not Accepted Deviations:
-
-❌ Missing text in PDF 2: 'Total Amount: $500'
-❌ Extra text in PDF 2: 'Discount: 10%'
-
-
----
-
-Summary:
-
-If text is found in another location: ✅ Accepted Deviation
-
-If text is missing or extra: ❌ Not Accepted Deviation
-
-
-Would you like to include table comparisons as well?
-
