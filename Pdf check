@@ -1,68 +1,21 @@
-import pdfplumber
-import difflib
-import nltk
+Your task is to compare PDF1 and PDF2 as a document analyst. You MUST identify the differences between the two PDFs, capturing any extra or missing values in PDF1.
 
-nltk.download("punkt")  # Download tokenizer
+You will be penalized for any omissions, so include all steps and details in your response.
 
-def extract_sentences_per_page(pdf_path):
-    """Extract sentences from each page and store them with page numbers"""
-    text_per_page = {}
-    with pdfplumber.open(pdf_path) as pdf:
-        for page_num, page in enumerate(pdf.pages, start=1):
-            text = page.extract_text() or ""
-            sentences = nltk.sent_tokenize(text)  # Sentence-level split
-            text_per_page[page_num] = sentences
-    return text_per_page
+Your task is divided into the following sub-tasks:
 
-def compare_pdfs(pdf1_path, pdf2_path):
-    """Compare two PDFs at the sentence level"""
-    pdf1_sentences = extract_sentences_per_page(pdf1_path)
-    pdf2_sentences = extract_sentences_per_page(pdf2_path)
+. <**Difference Identification**>: Identify the differences between PDF1 and PDF2, specifying whether the values are extra or missing in PDF1.
 
-    accepted_deviations = []
-    not_accepted_deviations = []
+1 2. <**Location Verification**>: Verify if the missing or extra values are available in other places on the same page or different pages.
 
-    # Flatten sentences with page numbers
-    pdf1_sent_list = [(page, sent.strip()) for page, sents in pdf1_sentences.items() for sent in sents]
-    pdf2_sent_list = [(page, sent.strip()) for page, sents in pdf2_sentences.items() for sent in sents]
+3. <**Matching Analysis**>: Analyze If the values match exactly or not.
 
-    pdf1_sentence_set = {sent for _, sent in pdf1_sent_list}
-    pdf2_sentence_set = {sent for _, sent in pdf2_sent_list}
+For each missing value, <**mark the page number**> where the value is missing.
 
-    # Check for missing and extra sentences
-    for page, sent in pdf1_sent_list:
-        if sent not in pdf2_sentence_set:
-            not_accepted_deviations.append(f"Missing sentence in PDF 2 (Page {page}): '{sent}'")
+Output format: Respond back in STRING format as below:
 
-    for page, sent in pdf2_sent_list:
-        if sent not in pdf1_sentence_set:
-            not_accepted_deviations.append(f"Extra sentence in PDF 2 (Page {page}): '{sent}'")
+"abcdefgh
 
-    # Check if sentences exist elsewhere (position ignored)
-    for page1, sent1 in pdf1_sent_list:
-        found_elsewhere = any(sent1 == sent2 for _, sent2 in pdf2_sent_list)
-        if found_elsewhere:
-            accepted_deviations.append(f"Sentence moved: '{sent1}' (Found on a different page)")
+Example output:
 
-    # Remove duplicates
-    accepted_deviations = list(set(accepted_deviations))
-
-    # Output results
-    print("\n=== Accepted Deviations ===")
-    if accepted_deviations:
-        for deviation in accepted_deviations:
-            print(deviation)
-    else:
-        print("No accepted deviations found.")
-
-    print("\n=== Not Accepted Deviations ===")
-    if not_accepted_deviations:
-        for deviation in not_accepted_deviations:
-            print(deviation)
-    else:
-        print("No not-accepted deviations found.")
-
-# Example usage
-pdf1 = "sample1.pdf"
-pdf2 = "sample2.pdf"
-compare_pdfs(pdf1, pdf2)
+"Page 1: Value 'xyz" is missing, Page 2: Value abc is extra, Page 3: Value 'def' does not match exactly"
