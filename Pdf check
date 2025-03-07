@@ -1,21 +1,87 @@
-Your task is to compare PDF1 and PDF2 as a document analyst. You MUST identify the differences between the two PDFs, capturing any extra or missing values in PDF1.
+import pdfplumber
+from sentence_transformers import SentenceTransformer
+import faiss
+import numpy as np
+import pandas as pd
 
-You will be penalized for any omissions, so include all steps and details in your response.
+# Load AI-powered sentence embedding model
+model = SentenceTransformer("all-MiniLM-L6-v2")
 
-Your task is divided into the following sub-tasks:
+def extract_sentences_per_page(pdf_path):
+    """Extract sentences from each page and store them with page numbers"""
+    text_per_page = {}
+    with pdfplumber.open(pdf_path) as pdf:
+        for page_num, page in enumerate(pdf.pages, start=1):
+            text = page.extract_text() or ""
+            sentences = [s.strip() for s in text.split(". ") if s.strip()]  # Sentence splitting
+            text_per_page[page_num] = sentences
+    return text_per_page
 
-. <**Difference Identification**>: Identify the differences between PDF1 and PDF2, specifying whether the values are extra or missing in PDF1.
+def embed_sentences(sentences):
+    """Convert sentences into AI embeddings"""
+    return model.encode(sentences, convert_to_numpy=True)
 
-1 2. <**Location Verification**>: Verify if the missing or extra values are available in other places on the same page or different pages.
+def compare_pdfs(pdf1_path, pdf2_path, output_csv="comparison_result.csv"):
+    """Compare PDFs at the sentence level and save results in CSV format"""
+    pdf1_text = extract_sentences_per_page(pdf1_path)
+    pdf2_text = extract_sentences_per_page(pdf2_path)
 
-3. <**Matching Analysis**>: Analyze If the values match exactly or not.
+    pdf1_sentences = [(page, sent) for page, sents in pdf1_text.items() for sent in sents]
+    pdf2_sentences = [(page, sent) for page, sents in pdf2_text.items() for sent in sents]
 
-For each missing value, <**mark the page number**> where the value is missing.
+    pdf1_sent_list = [sent for _, sent in pdf1_sentences]
+    pdf2_sent_list = [sent for _, sent in pdf2_sentences]
 
-Output format: Respond back in STRING format as below:
+    # Use FAISS for efficient similarity search
+    index = faiss.IndexFlatL2(384)  # 384-dimensional embeddings
+    pdf2_embeddings = embed_sentences(pdf2_sent_list)
+    index.add(pdf2_embeddings)
 
-"abcdefgh
+    pdf1_embeddings = embed_sentences(pdf1_sent_list)
+    distances, indices = index.search(pdf1_embeddings, 1)  # Find closest match
 
-Example output:
+    results = []
+    
+    for i, (distance, idx) in enumerate(zip(distances, indices)):
+        sent1_page, sent1 = pdf1_sentences[i]
+        sent2_page = pdf2_sentences[idx[0]][0] if distance[0] < 0.4 else None
+        sent2 = pdf2_sentences[idx[0]][1] if distance[0] < 0.4 else None
 
-"Page 1: Value 'xyz" is missing, Page 2: Value abc is extra, Page 3: Value 'def' does not match exactly"
+        # Classify match type
+        if distance[0] < 0.4:  # If a match is found
+            if sent1_page == sent2_page:
+                match_type = "Exact Match"
+            else:
+                match_type = "Moved Match (Different Page)"
+        else:
+            match_type = "Missing in PDF2"
+
+        results.append([sent1, sent1_page, sent2, sent2_page, match_type])
+
+    # Find extra sentences in PDF2
+    pdf2_unused = set(range(len(pdf2_sentences))) - set(indices.flatten())
+    for idx in pdf2_unused:
+        sent2_page, sent2 = pdf2_sentences[idx]
+        results.append(["", "", sent2, sent2_page, "Extra in PDF2"])
+
+    # Add more detailed classification
+    for row in results:
+        sent1, sent1_page, sent2, sent2_page, match_type = row
+
+        if match_type == "Moved Match (Different Page)":
+            if abs(sent1_page - sent2_page) == 1:
+                row[4] = "Moved Match (Nearby Page)"
+            else:
+                row[4] = "Moved Match (Far Page)"
+        
+        if match_type == "Missing in PDF2" and any(sent1 in s for _, s in pdf2_sentences):
+            row[4] = "Moved Match (Different Position, Same Page)"
+    
+    # Convert results to DataFrame and save to CSV
+    df = pd.DataFrame(results, columns=["PDF1 Sentence", "PDF1 Page", "PDF2 Sentence", "PDF2 Page", "Match Type"])
+    df.to_csv(output_csv, index=False)
+
+    print(f"Comparison report saved as {output_csv}")
+
+# Example usage
+compare_pdfs("sample1.pdf", "sample2.pdf")
