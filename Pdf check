@@ -34,44 +34,32 @@ def overall_pdf_comparison(pdf1_path, pdf2_path, output_csv="pdf_comparison_resu
         for i in range(match.size):
             matched_indices.add((match.a + i, match.b + i))
 
-    captured_sentences = set()  # To track reported differences
-
     for i, (sent1_page, sent1_idx, sent1) in enumerate(pdf1_sentences):
-        # Check if this sentence has an exact match in PDF2
-        matched = next((j for j in matched_indices if j[0] == i), None)
+        if not any(i == match[0] for match in matched_indices):  # If this sentence is unmatched
+            results.append([sent1_page, sent1, "(Not Found)", "Missing in PDF2", "❌ Mismatch"])
+            continue
 
-        if matched:
-            _, matched_idx = matched
-            sent2_page, sent2_idx, sent2 = pdf2_sentences[matched_idx]
+        matched_idx = next(match[1] for match in matched_indices if match[0] == i)
+        sent2_page, sent2_idx, sent2 = pdf2_sentences[matched_idx]
 
-            # Ignore exact matches or small position changes within the same page
-            if sent1_page == sent2_page and abs(sent1_idx - sent2_idx) <= 1:
-                continue  # Ignore small shifts within the same page
+        # Ignore minor shifts within the same page
+        if sent1_page == sent2_page and abs(sent1_idx - sent2_idx) <= 1:
+            continue  
 
-            # Capture reordered sentences
-            if sent1_page == sent2_page and sent1_idx != sent2_idx:
-                description = f"Position swapped within page"
-                status = "⚠️ Moved (Reordered)"
-            else:
-                description = f"Moved to Page {sent2_page}"
-                status = "⚠️ Moved (Different Page)"
-
+        if sent1_page == sent2_page:
+            description = "Position swapped within page"
+            status = "⚠️ Moved (Reordered)"
         else:
-            sent2_page, sent2 = None, "(Not Found)"
-            description = "Missing in PDF2"
-            status = "❌ Mismatch"
+            description = f"Moved to Page {sent2_page}"
+            status = "⚠️ Moved (Different Page)"
 
-        if sent1 not in captured_sentences:
-            results.append([sent1_page, sent1, sent2, description, status])
-            captured_sentences.add(sent1)
+        results.append([sent1_page, sent1, sent2, description, status])
 
     # Find extra sentences in PDF2
     pdf2_unused = set(range(len(pdf2_sentences))) - {match[1] for match in matched_indices}
     for idx in pdf2_unused:
         sent2_page, _, sent2 = pdf2_sentences[idx]
-        if sent2 not in captured_sentences:
-            results.append([sent2_page, "(Not Found)", sent2, "Extra in PDF2", "❌ Mismatch"])
-            captured_sentences.add(sent2)
+        results.append([sent2_page, "(Not Found)", sent2, "Extra in PDF2", "❌ Mismatch"])
 
     # Convert results to DataFrame and save to CSV
     df = pd.DataFrame(results, columns=["Page Number", "PDF1 Sentence", "PDF2 Sentence", "Description", "Status"])
