@@ -1,123 +1,19 @@
 import pdfplumber
-from sentence_transformers import SentenceTransformer
-import faiss
-import numpy as np
+import difflib
 import pandas as pd
 
-# Load AI-powered sentence embedding model
-model = SentenceTransformer("all-MiniLM-L6-v2")
-
-def extract_sentences_per_page(pdf_path):
+def extract_sentences(pdf_path):
     """Extract sentences from each page and store them with page numbers"""
     text_per_page = {}
     with pdfplumber.open(pdf_path) as pdf:
         for page_num, page in enumerate(pdf.pages, start=1):
             text = page.extract_text() or ""
-            sentences = [s.strip() for s in text.split(". ") if s.strip()]  # Sentence splitting
+            sentences = [s.strip() for s in text.split(". ") if s.strip()]  # Simple sentence splitting
             text_per_page[page_num] = sentences
     return text_per_page
-
-def embed_sentences(sentences):
-    """Convert sentences into AI embeddings"""
-    return model.encode(sentences, convert_to_numpy=True)
-
-def compare_pdfs(pdf1_path, pdf2_path, output_csv="comparison_result.csv"):
-    """Compare PDFs at the sentence level and save results in CSV format"""
-    pdf1_text = extract_sentences_per_page(pdf1_path)
-    pdf2_text = extract_sentences_per_page(pdf2_path)
-
-    pdf1_sentences = [(page, sent) for page, sents in pdf1_text.items() for sent in sents]
-    pdf2_sentences = [(page, sent) for page, sents in pdf2_text.items() for sent in sents]
-
-    pdf1_sent_list = [sent for _, sent in pdf1_sentences]
-    pdf2_sent_list = [sent for _, sent in pdf2_sentences]
-
-    # Use FAISS for efficient similarity search
-    index = faiss.IndexFlatL2(384)  # 384-dimensional embeddings
-    pdf2_embeddings = embed_sentences(pdf2_sent_list)
-    index.add(pdf2_embeddings)
-
-    pdf1_embeddings = embed_sentences(pdf1_sent_list)
-    distances, indices = index.search(pdf1_embeddings, 1)  # Find closest match
-
-    results = []
-    
-    for i, (distance, idx) in enumerate(zip(distances, indices)):
-        sent1_page, sent1 = pdf1_sentences[i]
-        sent2_page = pdf2_sentences[idx[0]][0] if distance[0] < 0.4 else None
-        sent2 = pdf2_sentences[idx[0]][1] if distance[0] < 0.4 else None
-
-        # Classify match type
-        if distance[0] < 0.4:  # If a match is found
-            if sent1_page == sent2_page:
-                match_type = "Exact Match"
-            else:
-                match_type = "Moved Match (Different Page)"
-        else:
-            match_type = "Missing in PDF2"
-
-        results.append([sent1, sent1_page, sent2, sent2_page, match_type])
-
-    # Find extra sentences in PDF2
-    pdf2_unused = set(range(len(pdf2_sentences))) - set(indices.flatten())
-    for idx in pdf2_unused:
-        sent2_page, sent2 = pdf2_sentences[idx]
-        results.append(["", "", sent2, sent2_page, "Extra in PDF2"])
-
-    # Add more detailed classification
-    for row in results:
-        sent1, sent1_page, sent2, sent2_page, match_type = row
-
-        if match_type == "Moved Match (Different Page)":
-            if abs(sent1_page - sent2_page) == 1:
-                row[4] = "Moved Match (Nearby Page)"
-            else:
-                row[4] = "Moved Match (Far Page)"
-        
-        if match_type == "Missing in PDF2" and any(sent1 in s for _, s in pdf2_sentences):
-            row[4] = "Moved Match (Different Position, Same Page)"
-    
-    # Convert results to DataFrame and save to CSV
-    df = pd.DataFrame(results, columns=["PDF1 Sentence", "PDF1 Page", "PDF2 Sentence", "PDF2 Page", "Match Type"])
-    df.to_csv(output_csv, index=False)
-
-    print(f"Comparison report saved as {output_csv}")
-
-# Example usage
-compare_pdfs("sample1.pdf", "sample2.pdf")
-
-
-
-
-
-
-
-
-import pdfplumber
-from sentence_transformers import SentenceTransformer
-import faiss
-import numpy as np
-import pandas as pd
-
-# Load AI-powered sentence embedding model
-model = SentenceTransformer("all-MiniLM-L6-v2")
-
-def extract_sentences(pdf_path):
-    """Extract sentences from the entire PDF and store them with page numbers"""
-    text_per_page = {}
-    with pdfplumber.open(pdf_path) as pdf:
-        for page_num, page in enumerate(pdf.pages, start=1):
-            text = page.extract_text() or ""
-            sentences = [s.strip() for s in text.split(". ") if s.strip()]  # Sentence splitting
-            text_per_page[page_num] = sentences
-    return text_per_page
-
-def embed_sentences(sentences):
-    """Convert sentences into AI embeddings"""
-    return model.encode(sentences, convert_to_numpy=True)
 
 def overall_pdf_comparison(pdf1_path, pdf2_path, output_csv="pdf_comparison_result.csv"):
-    """Perform overall document comparison and save deviations in CSV format"""
+    """Compare two PDFs and save deviations in a CSV file"""
     pdf1_text = extract_sentences(pdf1_path)
     pdf2_text = extract_sentences(pdf2_path)
 
@@ -127,27 +23,25 @@ def overall_pdf_comparison(pdf1_path, pdf2_path, output_csv="pdf_comparison_resu
     pdf1_sent_list = [sent for _, sent in pdf1_sentences]
     pdf2_sent_list = [sent for _, sent in pdf2_sentences]
 
-    # Use FAISS for similarity search
-    index = faiss.IndexFlatL2(384)  # 384-dimensional embeddings
-    pdf2_embeddings = embed_sentences(pdf2_sent_list)
-    index.add(pdf2_embeddings)
-
-    pdf1_embeddings = embed_sentences(pdf1_sent_list)
-    distances, indices = index.search(pdf1_embeddings, 1)  # Find closest match
-
     results = []
     
-    for i, (distance, idx) in enumerate(zip(distances, indices)):
-        sent1_page, sent1 = pdf1_sentences[i]
-        sent2_page = pdf2_sentences[idx[0]][0] if distance[0] < 0.4 else None
-        sent2 = pdf2_sentences[idx[0]][1] if distance[0] < 0.4 else None
+    # Match sentences using difflib (basic text similarity)
+    matcher = difflib.SequenceMatcher(None, pdf1_sent_list, pdf2_sent_list)
+    matches = matcher.get_matching_blocks()
 
-        # Skip exact matches
-        if distance[0] < 0.4 and sent1_page == sent2_page:
-            continue  # Ignore identical matches
+    matched_indices = set()
+    for match in matches:
+        for i in range(match.size):
+            matched_indices.add((match.a + i, match.b + i))
 
-        # Classify deviation type
-        if distance[0] < 0.4:
+    for i, (sent1_page, sent1) in enumerate(pdf1_sentences):
+        # Check if this sentence has an exact match in PDF2
+        matched = next((j for j in matched_indices if j[0] == i), None)
+
+        if matched:
+            _, matched_idx = matched
+            sent2_page, sent2 = pdf2_sentences[matched_idx]
+
             if sent1_page != sent2_page:
                 description = f"Moved to Page {sent2_page}"
                 status = "⚠️ Moved (Different Page)"
@@ -155,13 +49,14 @@ def overall_pdf_comparison(pdf1_path, pdf2_path, output_csv="pdf_comparison_resu
                 description = "Position Changed"
                 status = "⚠️ Moved (Same Page)"
         else:
+            sent2_page, sent2 = None, "(Not Found)"
             description = "Missing in PDF2"
             status = "❌ Mismatch"
 
-        results.append([sent1_page, sent1, sent2 if sent2 else "(Not Found)", description, status])
+        results.append([sent1_page, sent1, sent2, description, status])
 
     # Find extra sentences in PDF2
-    pdf2_unused = set(range(len(pdf2_sentences))) - set(indices.flatten())
+    pdf2_unused = set(range(len(pdf2_sentences))) - {match[1] for match in matched_indices}
     for idx in pdf2_unused:
         sent2_page, sent2 = pdf2_sentences[idx]
         results.append([sent2_page, "(Not Found)", sent2, "Extra in PDF2", "❌ Mismatch"])
