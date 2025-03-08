@@ -1,68 +1,65 @@
 import pdfplumber
-import difflib
 import pandas as pd
+import difflib
 
-def extract_sentences(pdf_path):
-    """Extract sentences from each page and store them with their positions"""
-    text_per_page = {}
+def extract_text_table(pdf_path):
+    """Extract text and tables from a PDF file, page by page."""
+    page_data = {}
     with pdfplumber.open(pdf_path) as pdf:
         for page_num, page in enumerate(pdf.pages, start=1):
             text = page.extract_text() or ""
-            sentences = [s.strip() for s in text.split(". ") if s.strip()]  # Simple sentence splitting
-            text_per_page[page_num] = sentences
-    return text_per_page
+            text_lines = [line.strip() for line in text.split("\n") if line.strip()]  
 
-def overall_pdf_comparison(pdf1_path, pdf2_path, output_csv="pdf_comparison_result.csv"):
-    """Compare two PDFs and save deviations in a CSV file"""
-    pdf1_text = extract_sentences(pdf1_path)
-    pdf2_text = extract_sentences(pdf2_path)
+            # Extract tables
+            tables = page.extract_table()
+            table_lines = []
+            if tables:
+                for row in tables:
+                    table_lines.append(" | ".join([cell.strip() if cell else "" for cell in row]))
 
-    pdf1_sentences = [(page, idx, sent) for page, sents in pdf1_text.items() for idx, sent in enumerate(sents)]
-    pdf2_sentences = [(page, idx, sent) for page, sents in pdf2_text.items() for idx, sent in enumerate(sents)]
+            page_data[page_num] = text_lines + table_lines  
+    return page_data
 
-    pdf1_sent_list = [sent for _, _, sent in pdf1_sentences]
-    pdf2_sent_list = [sent for _, _, sent in pdf2_sentences]
+def compare_pdfs(pdf1_path, pdf2_path, output_csv="pdf_comparison_result.csv"):
+    """Compare PDFs and detect missing, extra, and moved text."""
+    pdf1_data = extract_text_table(pdf1_path)
+    pdf2_data = extract_text_table(pdf2_path)
 
     results = []
-    
-    # Match sentences using difflib (basic text similarity)
-    matcher = difflib.SequenceMatcher(None, pdf1_sent_list, pdf2_sent_list)
-    matches = matcher.get_matching_blocks()
+    all_pages = sorted(set(pdf1_data.keys()).union(set(pdf2_data.keys())))
 
-    matched_indices = {match.a: match.b for match in matches for i in range(match.size)}
+    for page in all_pages:
+        pdf1_lines = pdf1_data.get(page, [])
+        pdf2_lines = pdf2_data.get(page, [])
 
-    for i, (sent1_page, sent1_idx, sent1) in enumerate(pdf1_sentences):
-        if i in matched_indices:  # If the sentence is matched in PDF2
-            matched_idx = matched_indices[i]
-            sent2_page, sent2_idx, sent2 = pdf2_sentences[matched_idx]
+        matcher = difflib.SequenceMatcher(None, pdf1_lines, pdf2_lines)
+        matched_indices = set((match.a, match.b) for match in matcher.get_matching_blocks())
 
-            # Ignore minor shifts within the same page
-            if sent1_page == sent2_page and abs(sent1_idx - sent2_idx) <= 1:
-                continue  
+        # Find differences while considering moved text
+        checked_pdf2 = set()
 
-            if sent1_page == sent2_page:
-                description = "Position swapped within page"
-                status = "⚠️ Moved (Reordered)"
+        for i, line in enumerate(pdf1_lines):
+            if any(i == match[0] for match in matched_indices):
+                continue  # Ignore exact matches
+            
+            # Check if the line exists in PDF2 but in a different place
+            found_in_pdf2 = [j for j, l in enumerate(pdf2_lines) if l == line and j not in checked_pdf2]
+
+            if found_in_pdf2:
+                results.append([page, line, pdf2_lines[found_in_pdf2[0]], "Moved within document", "🔄"])
+                checked_pdf2.add(found_in_pdf2[0])  # Mark as checked
             else:
-                description = f"Moved to Page {sent2_page}"
-                status = "⚠️ Moved (Different Page)"
+                results.append([page, line, "(Not Found)", "Missing in PDF2", "❌"])
 
-            results.append([sent1_page, sent1, sent2, description, status])
+        # Find extra lines in PDF2 that do not exist in PDF1
+        for i, line in enumerate(pdf2_lines):
+            if i not in checked_pdf2 and all(line != pdf1_line for pdf1_line in pdf1_lines):
+                results.append([page, "(Not Found)", line, "Extra in PDF2", "➕"])
 
-        else:
-            results.append([sent1_page, sent1, "(Not Found)", "Missing in PDF2", "❌ Mismatch"])
-
-    # Find extra sentences in PDF2
-    unmatched_pdf2_sentences = set(range(len(pdf2_sentences))) - set(matched_indices.values())
-    for idx in unmatched_pdf2_sentences:
-        sent2_page, _, sent2 = pdf2_sentences[idx]
-        results.append([sent2_page, "(Not Found)", sent2, "Extra in PDF2", "❌ Mismatch"])
-
-    # Convert results to DataFrame and save to CSV
-    df = pd.DataFrame(results, columns=["Page Number", "PDF1 Sentence", "PDF2 Sentence", "Description", "Status"])
+    # Convert differences to DataFrame and save as CSV
+    df = pd.DataFrame(results, columns=["Page Number", "PDF1 Content", "PDF2 Content", "Description", "Status"])
     df.to_csv(output_csv, index=False)
-
-    print(f"Overall PDF comparison report saved as {output_csv}")
+    print(f"Comparison saved as {output_csv}")
 
 # Example usage
-overall_pdf_comparison("sample1.pdf", "sample2.pdf")
+compare_pdfs("BSR_V3.pdf", "BSR_V2.pdf")
