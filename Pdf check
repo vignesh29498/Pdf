@@ -63,3 +63,75 @@ def compare_pdfs(pdf1_path, pdf2_path, output_csv="pdf_comparison_result.csv"):
 
 # Example usage
 compare_pdfs("BSR_V3.pdf", "BSR_V2.pdf")
+
+
+
+
+
+import pdfplumber
+import pandas as pd
+import difflib
+
+def extract_text_table(pdf_path):
+    """Extract text and tables from a PDF file, page by page."""
+    page_data = {}
+    with pdfplumber.open(pdf_path) as pdf:
+        for page_num, page in enumerate(pdf.pages, start=1):
+            text = page.extract_text() or ""
+            text_lines = [line.strip() for line in text.split("\n") if line.strip()]
+
+            # Extract tables
+            tables = page.extract_table()
+            table_lines = []
+            if tables:
+                for row in tables:
+                    table_lines.append(" | ".join([cell.strip() if cell else "" for cell in row]))
+
+            page_data[page_num] = text_lines + table_lines
+    return page_data
+
+def compare_pdfs(pdf1_path, pdf2_path, output_csv="pdf_comparison_result.csv"):
+    """Compare PDFs and detect missing, extra, and significantly moved text."""
+    pdf1_data = extract_text_table(pdf1_path)
+    pdf2_data = extract_text_table(pdf2_path)
+
+    results = []
+    all_pages = sorted(set(pdf1_data.keys()).union(set(pdf2_data.keys())))
+
+    for page in all_pages:
+        pdf1_lines = pdf1_data.get(page, [])
+        pdf2_lines = pdf2_data.get(page, [])
+
+        matcher = difflib.SequenceMatcher(None, pdf1_lines, pdf2_lines)
+        matched_indices = set((match.a, match.b) for match in matcher.get_matching_blocks())
+
+        checked_pdf2 = set()
+
+        for i, line in enumerate(pdf1_lines):
+            if any(i == match[0] for match in matched_indices):
+                continue  # Ignore exact matches
+
+            # Check if the line exists in PDF2 but slightly moved
+            found_in_pdf2 = [j for j, l in enumerate(pdf2_lines) if l == line and j not in checked_pdf2]
+            if found_in_pdf2:
+                # Check if moved within a small range (minor movement ignored)
+                if abs(i - found_in_pdf2[0]) <= 2:
+                    checked_pdf2.add(found_in_pdf2[0])  # Mark as checked, ignore minor move
+                else:
+                    results.append([page, line, pdf2_lines[found_in_pdf2[0]], "Moved to another position", "🔄"])
+                    checked_pdf2.add(found_in_pdf2[0])
+            else:
+                results.append([page, line, "(Not Found)", "Missing in PDF2", "❌"])
+
+        # Find extra lines in PDF2 that do not exist in PDF1
+        for i, line in enumerate(pdf2_lines):
+            if i not in checked_pdf2 and all(line != pdf1_line for pdf1_line in pdf1_lines):
+                results.append([page, "(Not Found)", line, "Extra in PDF2", "➕"])
+
+    # Convert differences to DataFrame and save as CSV
+    df = pd.DataFrame(results, columns=["Page Number", "PDF1 Content", "PDF2 Content", "Description", "Status"])
+    df.to_csv(output_csv, index=False)
+    print(f"Comparison saved as {output_csv}")
+
+# Example usage
+compare_pdfs("BSR_V3.pdf", "BSR_V2.pdf")
